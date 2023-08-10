@@ -1,5 +1,7 @@
 import pandas as pd
 import sqlalchemy as db
+from pandas.api.types import is_datetime64tz_dtype
+from sqlalchemy import BOOLEAN, FLOAT, INTEGER, TIMESTAMP, VARCHAR
 
 
 class PostgresClient:
@@ -10,8 +12,6 @@ class PostgresClient:
         host: str,
         port: int,
         database_name: str,
-        conflict_resolution_strategy: str = "append",
-        dataset_name: str | None = None,
     ):
         self.db_user = username
         self.db_password = password
@@ -23,10 +23,18 @@ class PostgresClient:
             f":{self.db_password}@{self.db_host}"
             f":{self.db_port}/{self.db_name}"
         )
+        try:
+            self.engine, self.con = self.initialise_client()
+        except db.exc.OperationalError as operational_error:
+            raise ConnectionError(
+                "Could not connect to postgres client. "
+                f"Reason: {operational_error}"
+            ) from operational_error
 
     def initialise_client(self):
         self.engine = db.create_engine(self.db_uri)
         self.con = self.engine.connect()
+        return self.engine, self.con
 
     def query(self, query):
         query_result = self.con.execute(query)
@@ -34,3 +42,41 @@ class PostgresClient:
         columns = query_result.keys()
         df = pd.DataFrame(data, columns=columns)
         return df
+
+    # conflict res should be a function of writing, not initialisation!
+    def write(
+        self,
+        df: pd.DataFrame,
+        table_name: str,
+        dataset_name: str,
+        conflict_resolution_strategy: str,
+    ):
+        DTYPE_MAP = {
+            "int64": INTEGER,
+            "float64": FLOAT,
+            "datetime64[ns]": TIMESTAMP,
+            "datetime64[ns, UTC]": TIMESTAMP(timezone=True),
+            "bool": BOOLEAN,
+            "object": VARCHAR,
+        }
+
+        def _get_pg_datatypes(df):
+            dtypes = {}
+            for col, dtype in df.dtypes.items():
+                if is_datetime64tz_dtype(dtype):
+                    dtypes[col] = DTYPE_MAP["datetime64[ns, UTC]"]
+                else:
+                    dtypes[col] = DTYPE_MAP[str(dtype)]
+            return dtypes
+
+        dtypes = _get_pg_datatypes(df)
+
+        df.to_sql(
+            table_name,
+            self.con,
+            schema=dataset_name,
+            if_exists=conflict_resolution_strategy,
+            index=False,
+            method="multi",
+            dtype=dtypes,
+        )
