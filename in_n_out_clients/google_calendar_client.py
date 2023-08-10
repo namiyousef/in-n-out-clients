@@ -1,12 +1,8 @@
 from __future__ import print_function
 
 import datetime
-import os.path
 import logging
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
+import os.path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -14,11 +10,14 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-
 from in_n_out_clients.config import (
     GOOGLE_OAUTH_CREDENTIAL_FILE,
     GOOGLE_OAUTH_TOKEN,
 )
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 

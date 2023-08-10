@@ -1,5 +1,5 @@
-import sqlalchemy as db
 import pandas as pd
+import sqlalchemy as db
 
 
 class PostgresClient:

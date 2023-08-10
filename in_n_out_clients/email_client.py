@@ -1,20 +1,22 @@
+import logging
 import smtplib
+from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
-from email import encoders
 from email.utils import make_msgid
-import logging
 
 # from email.mime.text import MIMEText
 
 
 logging.basicConfig(format="%(levelname)s:%(message)s", level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
-SMTP_SETTINGS = dict(
-    gmail=dict(server_address="smtp.gmail.com", port=dict(ssl=465, tls=587)),
-    outlook=dict(server_address="smtp.office365.com", port=dict(tls=587)),
-)
+SMTP_SETTINGS = {
+    "gmail": {
+        "server_address": "smtp.gmail.com",
+        "port": {"ssl": 465, "tls": 587},
+    },
+    "outlook": {"server_address": "smtp.office365.com", "port": {"tls": 587}},
+}
 
 
 class EmailClient:
@@ -40,7 +42,11 @@ class EmailClient:
             smtp_settings = SMTP_SETTINGS[self.provider]
         except KeyError as e:
             raise ValueError(
-                f"Provider `{self.provider}` is not an acceptable type. Please choose a provider from the following {tuple(SMTP_SETTINGS.keys())}"
+                (
+                    f"Provider `{self.provider}` is not an acceptable type. "
+                    f"Please choose a provider from the following "
+                    f"{tuple(SMTP_SETTINGS.keys())}."
+                )
             )
 
         try:
@@ -97,7 +103,7 @@ class EmailClient:
 
         session = getattr(self, f"_connect_{self.connection_strategy}")()
 
-        logger.info(f"Connection made. Logging in...")
+        logger.info("Connection made. Logging in...")
         session.login(
             self.sender_email, self.password
         )  # login with mail_id and password
