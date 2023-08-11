@@ -71,25 +71,37 @@ class GoogleCalendarClient:
 
     # -- fail: if you find conflicts, you fail
     # -- replace: if you find conflicts, you replacde
+
+    def create_calendar(
+        calendar,
+        on_asset_conflict="ignore",
+    ):
+        None
+
     def create_events(
         self,
         events,
         calendar="primary",
         on_asset_conflict="ignore",
         on_data_conflict="ignore",
-        create_calendar=False,
+        data_conflict_properties: list | None = None,
+        create_calendar_if_not_exist=False,  # how to specify HOW to create the calendar...!
     ):
+        logger.info("Getting list of calendars available...")
         try:
             calendars = self.client.calendarList().list().execute()["items"]
+            logger.debug(f"Got {len(calendars)} calendars")
         except HttpError as http_error:
-            print(http_error.status_code)
-            raise Exception(
-                f"Could not read calendar information. Reason: {http_error}"
-            )
-        _calendars_available = {calendar["summary"] for calendar in calendars}
+            return {
+                "status_code": http_error.status_code,
+                "msg": f"Could not read calendar information. Reason: {http_error}",
+            }
 
+        _calendars_available = {calendar["summary"] for calendar in calendars}
         if calendar not in _calendars_available:
-            if create_calendar:
+            logger.info(f"calendar=`{calendar}` does not exist")
+            if create_calendar_if_not_exist:
+                logger.info(f"Creating new calendar=`{calendar}`...")
                 raise NotImplementedError(
                     (
                         f"Could not find calendar={calendar}. At the moment "
@@ -99,22 +111,25 @@ class GoogleCalendarClient:
                     )
                 )
             else:
-                raise FileNotFoundError(
-                    (
-                        f"Could not find calendar={calendar}. If you wish to "
-                        "create it, set table creation to `True`"
-                    )
-                )
+                return {
+                    "status_code": 404,
+                    "msg": f"Could not find calendar={calendar}. If you wish to "
+                    "create it, set table creation to `True`",
+                }
 
         if on_asset_conflict == "fail":
-            raise Exception(f"calendar={calendar} exists")
+            return {
+                "status_code": 409,
+                "msg": f"calendar={calendar} exists and on_asset_conflict=`{on_asset_conflict}`. If you wish to edit calendar please change conflict_resolution_strategy",
+            }
 
         if on_asset_conflict == "ignore":
             return {
+                "status_code": 204,
                 "msg": (
-                    f"calendar={calendar} exists but dropped request since "
-                    "request on_asset_conflict=`ignore`"
-                )
+                    f"calendar={calendar} exists but request dropped since "
+                    "on_asset_conflict=`ignore`"
+                ),
             }
 
         if on_asset_conflict == "replace":
@@ -129,6 +144,17 @@ class GoogleCalendarClient:
             raise NotImplementedError(
                 "There is currently only support for data level append"
             )
+
+        # if ignore --> if there is a conflict, then don't commit the conflicting item
+        # if append --> don't do any checks
+        # if replace --> if there is a conflict, then delete it and write the new one
+        # if fail --> if there is any conflcit, then fail whole thing. Conflicts need to be checked before weriting
+        # on fail, needs to cleanup if a new calendar HAD been created... this is complex!
+        if on_data_conflict != "append":
+            # check that the input events contain the on conflict columns
+            # if not, AND if on_conflict is fail, then you MUST delete the table created if it had been created
+            # ?
+            None
         events_session = self.client.events()
         failed_writes = []
         # if failed writes, need to return 207 code. E.g. no guarantee of success
