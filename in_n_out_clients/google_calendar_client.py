@@ -45,10 +45,19 @@ class GoogleCalendarClient:
                     f.write(credentials.to_json())
         else:
             # TODO initial initialisation not working... need to fix this
-            flow = InstalledAppFlow.from_client_secrets_file(
-                GOOGLE_OAUTH_CREDENTIAL_FILE, SCOPES
-            )
-            print(flow.__dict__)
+            try:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    GOOGLE_OAUTH_CREDENTIAL_FILE, SCOPES
+                )
+            except FileNotFoundError as file_not_found_error:
+                raise ConnectionError(
+                    f"Could not find Google OAuth Credentals file: `{GOOGLE_OAUTH_CREDENTIAL_FILE}`"
+                ) from file_not_found_error
+
+            logger.info("Running flow...")
+            credentials = flow.run_local_server()
+            with open(GOOGLE_OAUTH_TOKEN, "w") as f:
+                f.write(credentials.to_json())
 
         logger.info("Initialising client...")
         client = build("calendar", "v3", credentials=credentials)
@@ -56,53 +65,117 @@ class GoogleCalendarClient:
         return client
 
     # ignore, replace, fail
-    # -- ignore: if you find conflicts, you ignore the request
+    # -- ignore: if you find conflicts, you ignore the request.
+    # No error returned but should indicate that table was not created
     # -- append: if you find conflcits, you add the data nonetheless
+
     # -- fail: if you find conflicts, you fail
     # -- replace: if you find conflicts, you replacde
     def create_events(
         self,
         events,
         calendar="primary",
-        conflict_resolution_strategy="ignore",
+        on_asset_conflict="ignore",
+        on_data_conflict="ignore",
         create_calendar=False,
     ):
-        if calendar != "primary":
-            try:
-                calendars = (
-                    self.client.calendarList().list().execute()["items"]
-                )
-            except HttpError as http_error:
-                raise Exception(
-                    f"Could not read calendar information. Reason: {http_error}"
-                )
-            _calendars_available = {
-                calendar["summary"] for calendar in calendars
-            }
-            if calendar not in _calendars_available and create_calendar:
+        try:
+            calendars = self.client.calendarList().list().execute()["items"]
+        except HttpError as http_error:
+            print(http_error.status_code)
+            raise Exception(
+                f"Could not read calendar information. Reason: {http_error}"
+            )
+        _calendars_available = {calendar["summary"] for calendar in calendars}
+
+        if calendar not in _calendars_available:
+            if create_calendar:
                 raise NotImplementedError(
-                    f"Could not find calendar={calendar}. At the moment there is no support for creating new calendars from the client. Please do this manually on the web and try again."
+                    (
+                        f"Could not find calendar={calendar}. At the moment "
+                        "there is no support for creating new calendars from "
+                        "the client. Please do this manually on the web and "
+                        "try again."
+                    )
+                )
+            else:
+                raise FileNotFoundError(
+                    (
+                        f"Could not find calendar={calendar}. If you wish to "
+                        "create it, set table creation to `True`"
+                    )
                 )
 
-        if conflict_resolution_strategy != "append":
+        if on_asset_conflict == "fail":
+            raise Exception(f"calendar={calendar} exists")
+
+        if on_asset_conflict == "ignore":
+            return {
+                "msg": (
+                    f"calendar={calendar} exists but dropped request since "
+                    "request on_asset_conflict=`ignore`"
+                )
+            }
+
+        if on_asset_conflict == "replace":
+            # need to delete the calendar, then create a new calendar!
+            # TOOD not sure If I want to allow this tbh!
             raise NotImplementedError(
-                "Currently only supports append conflict resolution strategy"
+                "There is currently no support for replace strategy."
             )
 
+        # TODO need to come up with proper strat for this
+        if on_data_conflict != "append":
+            raise NotImplementedError(
+                "There is currently only support for data level append"
+            )
         events_session = self.client.events()
+        failed_writes = []
+        # if failed writes, need to return 207 code. E.g. no guarantee of success
+        # if all failed writes, need to return failure, e.g. 400
         for event_id, event in enumerate(events):
             try:
                 events_session.insert(
                     calendarId=calendar, body=event
                 ).execute()
             except HttpError as http_error:
+                status_code = http_error.status_code
                 logger.error(
-                    f"Failed to create event {event_id+1}/{len(events)}. Reason: {http_error}"
+                    (
+                        f"Failed to create event {event_id+1}/{len(events)}. "
+                        f"Reason: {http_error}"
+                    )
                 )
+                failed_writes.append(
+                    {
+                        "msg": http_error,
+                        "data": event,
+                        "status_code": status_code,
+                    }
+                )
+        if len(failed_writes) == len(events):
+            return {
+                "msg": "Failed to update calendar",
+                "status_code": 400,
+                "data": failed_writes,
+            }
+        elif not failed_writes:
+            return {
+                "msg": "Successfully wrote data to calendar",
+                "status_code": 201,
+            }
+        else:
+            return {
+                "msg": "At least some events failed to create",
+                "status_code": 207,
+                "data": failed_writes,
+            }
+
+    # should always return a json wherever possible! And add a status code too!
 
 
 # If modifying these scopes, delete the file token.json.
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+'''SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 
 def main():
@@ -161,7 +234,7 @@ def main():
             print(start, event["summary"])
 
     except HttpError as error:
-        print("An error occurred: %s" % error)
+        print("An error occurred: %s" % error)'''
 
 
 if __name__ == "__main__":
