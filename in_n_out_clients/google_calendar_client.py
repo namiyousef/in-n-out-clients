@@ -15,6 +15,14 @@ from in_n_out_clients.config import (
     GOOGLE_OAUTH_TOKEN,
 )
 
+from in_n_out_clients.in_n_out_types import (
+    ConflictResolutionStrategy,
+    APIResponse,
+)
+
+# TODO add ENUMs for conflict resolution strategy
+# TODO change the responses so the format is:
+# {"msg", "status_code": "data": []}
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -171,15 +179,27 @@ class GoogleCalendarClient:
 
         return conflict_metadata
 
+    # calendar_id is what? not the database, because database should be fixed per connection
+    # could be the dataset, OR table_name. But in this case, table_name makes more sense
+    # an event is the data you are writing to a specific table!
     def create_events(
         self,
-        calendar_id,
-        events,
-        on_asset_conflict="ignore",
-        on_data_conflict="ignore",
+        calendar_id: str,
+        events: list,
+        on_asset_conflict: str = "append",
+        on_data_conflict: str = "fail",
         data_conflict_properties: list | None = None,
-        create_calendar_if_not_exist=False,  # how to specify HOW to create the calendar...!
-    ):
+        create_calendar_if_not_exist: bool = False,  # how to specify HOW to create the calendar...!
+    ) -> APIResponse:
+        """Function to add events to a calendar
+
+        :param calendar_id: id of the calendar. See calendar resource for more information: https://developers.google.com/calendar/api/v3/reference/calendars
+        :param events: events to create. See for more information: https://developers.google.com/calendar/api/v3/reference/events/insert
+        :param on_asset_conflict: specify behaviour if calendar_id already exists, defaults to "ignore"
+        :param on_data_conflict: specify behaviour if event already exists, defaults to "ignore"
+        :param data_conflict_properties: event properties to check for conflicts, defaults to None
+        :param create_calendar_if_not_exist: flag to create a calendar if it does not already exist, defaults to False
+        """
         try:
             calendars = self._get_calendars()
         except HttpError as http_error:
@@ -211,30 +231,37 @@ class GoogleCalendarClient:
                     "msg": f"Could not find calendar with calendar_id=`{calendar_id}`. If you wish to "
                     "create it, set table creation to `True`",
                 }
-
-        if on_asset_conflict == "fail":
-            return {
-                "status_code": 409,
-                "msg": f"calendar with calendar_id=`{calendar_id}` exists and on_asset_conflict=`{on_asset_conflict}`. If you wish to edit calendar please change conflict_resolution_strategy",
-            }
-
-        if on_asset_conflict == "ignore":
-            return {
-                "status_code": 204,
-                "msg": (
-                    f"calendar_id=`{calendar_id}` exists but request dropped since "
-                    "on_asset_conflict=`ignore`"
-                ),
-            }
-
-        if on_asset_conflict == "replace":
-            # need to delete the calendar, then create a new calendar!
-            # TOOD not sure If I want to allow this tbh!
-            raise NotImplementedError(
-                "There is currently no support for replace strategy."
+        else:
+            logger.info(
+                f"Calendar with calendar_id=`{calendar_id}` exists... checking for conflicts..."
             )
+            match on_asset_conflict:
+                case ConflictResolutionStrategy.FAIL:
+                    _msg = f"calendar with calendar_id=`{calendar_id}` exists and on_asset_conflict=`{on_asset_conflict}`. If you wish to edit calendar please change conflict_resolution_strategy"
+                    logger.error(_msg)
+                    return {
+                        "status_code": 409,
+                        "msg": _msg,
+                    }
+                case ConflictResolutionStrategy.IGNORE:
+                    _msg = (
+                        f"calendar_id=`{calendar_id}` exists but request dropped since "
+                        "on_asset_conflict=`ignore`"
+                    )
+                    logger.info(_msg)
+                    return {"status_code": 204, "msg": _msg}
+                case ConflictResolutionStrategy.REPLACE:
+                    _msg = f"calendar with calendar_id=`{calendar_id}` exists and on_asset_conflict=`{on_asset_conflict}`. There is currently no support for this."
+                    # need to delete the calendar, then create a new calendar!
+                    # TOOD not sure If I want to allow this tbh!
+                    logger.error(_msg)
+                    raise NotImplementedError(_msg)
+                case _:
+                    logger.info(
+                        "on_asset_conflict set to `append`... ignoring any conflicts..."
+                    )
 
-        if on_data_conflict == "replace":
+        if on_data_conflict == ConflictResolutionStrategy.REPLACE:
             raise NotImplementedError("No support for this yet")
 
         # if ignore --> if there is a conflict, then don't commit the conflicting item
@@ -248,13 +275,18 @@ class GoogleCalendarClient:
         events_to_create = {
             event_id: event for event_id, event in enumerate(events)
         }
+        num_events_to_create = len(events_to_create)
+        logger.info(f"Got {num_events_to_create} events to write")
 
-        if on_data_conflict != "append":
-            logger.info("Checking events for conflicts...")
-            conflict_events = {}
+        if on_data_conflict != ConflictResolutionStrategy.APPEND:
+            logger.info(f"Checking {num_events_to_create} for conflicts...")
+            conflict_events = []
             for event_count, event_id in enumerate(
                 list(events_to_create.keys())
             ):
+                logger.debug(
+                    f"Checking event {event_count+1}/{num_events_to_create}..."
+                )
                 event = events_to_create[event_id]
                 if data_conflict_properties is None:
                     _data_conflict_properties = list(event.keys())
@@ -268,33 +300,54 @@ class GoogleCalendarClient:
                 conflict_metadata = self._generate_events_conflict_metadata(
                     event_conflict_identifiers
                 )
+                logger.debug(
+                    f"Searching calendar_id=`{calendar_id}` for events with the following properties: {_data_conflict_properties}"
+                )
                 event_list = events_session.list(
                     calendarId=calendar_id, **conflict_metadata
                 ).execute()
 
                 conflicting_events = event_list["items"]
+                num_conflicting_events = len(conflicting_events)
 
                 if conflicting_events:
+                    logger.debug(
+                        f"Event {event_count+1}/{num_events_to_create} conflicts with {num_conflicting_events}..."
+                    )
                     conflicting_event_ids = [
                         _conflict_event["id"]
                         for _conflict_event in conflicting_events
                     ]
-                    if on_data_conflict == "fail":
-                        return {
-                            "status_code": 409,
-                            "msg": f"At least one event exists with the following conflict properties `{data_conflict_properties}`",
-                            "data": {
-                                "event_to_write": event,
-                                "id_of_events_that_conflict": conflicting_event_ids,
-                            },
-                        }  # return appropriate response code! this is an early exit
 
-                    if on_data_conflict == "ignore":
-                        conflict_events[event_id] = {
-                            "event_to_write": events_to_create.pop(event_id),
-                            "id_of_events_that_conflict": conflicting_event_ids,
-                        }
-                    # there is a conflict!
+                    match on_data_conflict:
+                        case ConflictResolutionStrategy.FAIL:
+                            logger.error(
+                                f"Exiting process since on_data_conflict=`fail`..."
+                            )
+                            return {
+                                "status_code": 409,
+                                "msg": f"At least one event to write conflicts with events from calendar=`{calendar_id}` on the following conflict properties `{data_conflict_properties}`",
+                                "data": [
+                                    {
+                                        "event_to_write": event,
+                                        "event_id": event_id,
+                                        "id_of_events_that_conflict": conflicting_event_ids,
+                                    }
+                                ],
+                            }
+                        case ConflictResolutionStrategy.IGNORE:
+                            logger.info(
+                                f"Dropping event_id `{event_id}` from request since on_data_conflict=`ignore`..."
+                            )
+                            conflict_events.append(
+                                {
+                                    "event_to_write": events_to_create.pop(
+                                        event_id
+                                    ),
+                                    "event_id": event_id,
+                                    "id_of_events_that_conflict": conflicting_event_ids,
+                                }
+                            )
 
                 # if there is a conflict, then
             # check that the input events contain the on conflict columns
@@ -303,18 +356,26 @@ class GoogleCalendarClient:
         # if failed writes, need to return 207 code. E.g. no guarantee of success
         # if all failed writes, need to return failure, e.g. 400
         if not events_to_create:
-            return_msg = {"msg": "No events to create", "status_code": 200}
-            if on_data_conflict == "ignore" and conflict_events:
-                return_msg["ignored_events_due_to_conflict"] = conflict_events
+            _msg = "No events to create"
+            logger.info(_msg)
+            return_msg = {"msg": _msg, "status_code": 200}
+            if (
+                on_data_conflict == ConflictResolutionStrategy.IGNORE
+                and conflict_events
+            ):
+                return_msg["data"] = [
+                    {"ignored_events_due_to_conflict": conflict_events}
+                ]
 
             return return_msg
 
         num_events_to_create = len(events_to_create)
         logger.info(f"Writing {num_events_to_create} events...")
-        failed_events = {}
+        failed_writes = []
         for event_count, (event_id, event) in enumerate(
             events_to_create.items()
         ):
+            # TODO add debug logs
             try:
                 # TODO remember, replace needs to go here (e.g. update!)
                 events_session.insert(
@@ -328,103 +389,67 @@ class GoogleCalendarClient:
                         f"Reason: {http_error}"
                     )
                 )
-                failed_events[event_id] = {
-                    "msg": http_error,
-                    "data": event,
-                    "status_code": status_code,
-                }
-        num_failed_writes = len(failed_events)
-        if not failed_events:
+                failed_writes.append(
+                    {
+                        "msg": http_error,
+                        "data": {"event": event, "event_id": event_id},
+                        "status_code": status_code,
+                    }
+                )
+
+        num_failed_writes = len(failed_writes)
+        if not failed_writes:
+            _msg = f"Successfully wrote {num_events_to_create} events to calendar. No failures occurred in write process."
+            logger.info(_msg)
             return_msg = {
-                "msg": "Successfully wrote events to calendar",
+                "msg": _msg,
                 "status_code": 201,
             }
 
-            if on_data_conflict == "ignore" and conflict_events:
-                return_msg["data"] = {}
+            if (
+                on_data_conflict == ConflictResolutionStrategy.IGNORE
+                and conflict_events
+            ):
+                return_msg["data"] = [
+                    {"ignored_events_due_to_conflict": conflict_events}
+                ]
+
         else:
+            logger.info(f"{num_failed_writes} events failed to create")
             return_msg = {
-                "data": {"reasons": failed_events},
+                "data": [{"reason_for_failure": failed_writes}],
             }
 
             if num_failed_writes == num_events_to_create:
-                return_msg[
-                    "msg"
-                ] = "None of the events were successfully created due to write errors"
+                _msg = "None of the events were successfully created due to write errors"
+                logger.error()
+                return_msg.update(
+                    {
+                        "msg": _msg,
+                        "status_code": 400,
+                    }
+                )
             else:
-                return_msg["msg"] = "At least some events failed to create"
+                _msg = f"{num_failed_writes}/{num_events_to_create} events failed to create, but others were successful"
+                logger.info(_msg)
+                return_msg.update(
+                    {
+                        "msg": _msg,
+                        "status_code": 207,
+                    }
+                )
 
-        if on_data_conflict == "ignore" and conflict_events:
-            return_msg["data"][
-                "ignored_events_due_to_conflict"
-            ] = conflict_events
+            if (
+                on_data_conflict == ConflictResolutionStrategy.IGNORE
+                and conflict_events
+            ):
+                return_msg["data"].append(
+                    {"ignored_events_due_to_conflict": conflict_events}
+                )
 
         return return_msg
 
     # should always return a json wherever possible! And add a status code too!
-
-
-# If modifying these scopes, delete the file token.json.
-'''SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-
-
-def main():
-    """Shows basic usage of the Google Calendar API.
-    Prints the start and name of the next 10 events on the user's calendar.
-    """
-    creds = None
-    # The file token.json stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                "creds.json", SCOPES
-            )
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
-
-    try:
-        service = build("calendar", "v3", credentials=creds)
-
-        print(service.calendarList().list().execute()["items"])
-
-        # Call the Calendar API
-        now = (
-            datetime.datetime.utcnow().isoformat() + "Z"
-        )  # 'Z' indicates UTC time
-        print("Getting the upcoming 10 events")
-        events_result = (
-            service.events()
-            .list(
-                calendarId="primary",
-                timeMin=now,
-                maxResults=10,
-                singleEvents=True,
-                orderBy="startTime",
-            )
-            .execute()
-        )
-        events = events_result.get("items", [])
-
-        if not events:
-            print("No upcoming events found.")
-            return
-
-        # Prints the start and name of the next 10 events
-        for event in events:
-            start = event["start"].get("dateTime", event["start"].get("date"))
-            print(start, event["summary"])
-
-    except HttpError as error:
-        print("An error occurred: %s" % error)'''
 
 
 if __name__ == "__main__":
@@ -459,6 +484,6 @@ if __name__ == "__main__":
             ],
             data_conflict_properties=["summary"],
             on_asset_conflict="append",
-            on_data_conflict="ignore",
+            on_data_conflict="replace",
         )
     )
