@@ -1,4 +1,5 @@
 import codecs
+import json
 import os.path
 
 from setuptools import find_packages, setup
@@ -30,6 +31,9 @@ test_packages = ["pytest", "coverage", "pytest-dependency"]
 
 core_packages = parse_requirements("requirements/core.txt")
 
+with open("requirements/extra.json", "r") as f:
+    extras_require = json.load(f)
+
 setup(
     name="in_n_out_clients",
     version=get_version("in_n_out_clients/__init__.py"),
@@ -40,6 +44,7 @@ setup(
     install_requires=core_packages,
     test_require=test_packages,
     packages=find_packages(exclude=("tests*", "experiments*")),
+    extras_require=extras_require,
     # package_data={'': ['api/specs/api.yaml']},
     include_package_data=True,
     license="MIT",
