@@ -1,6 +1,5 @@
 from __future__ import print_function
 
-import datetime
 import logging
 import os.path
 from typing import List
@@ -86,7 +85,7 @@ class GoogleCalendarClient:
                 for conflict_key in data_conflict_properties
             }
         except KeyError as key_error:
-            raise Exception()
+            raise Exception() from key_error  # TODO revisit this
         else:
             unique_identifier = tuple(unique_keys.values())
             return unique_identifier
@@ -139,6 +138,7 @@ class GoogleCalendarClient:
                             .update(calendarId=calendar["id"], body=body)
                             .execute()
                         )
+                        print(updated_calendar)
 
                     if on_data_conflict == "ignore":
                         pass
@@ -147,6 +147,7 @@ class GoogleCalendarClient:
                         pass
 
         created_calendar = self.client.calendars().insert(body=body).execute()
+        print(created_calendar)
 
     def _get_calendars(self):
         logger.info("Getting list of calendar available...")
@@ -309,9 +310,7 @@ class GoogleCalendarClient:
 
         events_session = self.client.events()
 
-        events_to_create = {
-            event_id: event for event_id, event in enumerate(events)
-        }
+        events_to_create = dict(enumerate(events))
         num_events_to_create = len(events_to_create)
         logger.info(f"Got {num_events_to_create} events to write")
 
@@ -359,11 +358,16 @@ class GoogleCalendarClient:
                     match on_data_conflict:
                         case ConflictResolutionStrategy.FAIL:
                             logger.error(
-                                f"Exiting process since on_data_conflict=`fail`..."
+                                (
+                                    "Exiting process since "
+                                    "on_data_conflict=`fail`..."
+                                )
                             )
                             return {
                                 "status_code": 409,
-                                "msg": f"At least one event to write conflicts with events from calendar=`{calendar_id}` on the following conflict properties `{data_conflict_properties}`",
+                                "msg": (
+                                    f"At least one event to write conflicts with events from calendar=`{calendar_id}` on the following conflict properties `{data_conflict_properties}`"
+                                ),
                                 "data": [
                                     {
                                         "event_to_write": event,
