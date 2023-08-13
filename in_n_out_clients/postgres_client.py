@@ -43,13 +43,31 @@ class PostgresClient:
         df = pd.DataFrame(data, columns=columns)
         return df
 
+    def _write(
+        self,
+        table_name: str,
+        data,
+        on_data_conflict: str = "append",
+        on_asset_conflict: str = "append",
+        dataset_name: str | None = None,
+        # data_conflict_properties,
+    ):
+        resp = self.write(
+            df=data,
+            table_name=table_name,
+            dataset_name=dataset_name,
+            on_asset_conflict=on_asset_conflict,
+        )
+
+        return resp
+
     # conflict res should be a function of writing, not initialisation!
     def write(
         self,
         df: pd.DataFrame,
         table_name: str,
         dataset_name: str,
-        conflict_resolution_strategy: str,
+        on_asset_conflict: str,
     ):
         DTYPE_MAP = {
             "int64": INTEGER,
@@ -75,8 +93,10 @@ class PostgresClient:
             table_name,
             self.con,
             schema=dataset_name,
-            if_exists=conflict_resolution_strategy,
+            if_exists=on_asset_conflict,
             index=False,
             method="multi",
             dtype=dtypes,
         )
+
+        return {"status_code": 200, "msg": "successfully wrote data"}
