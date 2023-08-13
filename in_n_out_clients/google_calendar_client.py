@@ -3,6 +3,7 @@ from __future__ import print_function
 import datetime
 import logging
 import os.path
+from typing import List
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -14,15 +15,11 @@ from in_n_out_clients.config import (
     GOOGLE_OAUTH_CREDENTIAL_FILE,
     GOOGLE_OAUTH_TOKEN,
 )
-
 from in_n_out_clients.in_n_out_types import (
-    ConflictResolutionStrategy,
     APIResponse,
+    ConflictResolutionStrategy,
 )
 
-# TODO add ENUMs for conflict resolution strategy
-# TODO change the responses so the format is:
-# {"msg", "status_code": "data": []}
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -178,6 +175,46 @@ class GoogleCalendarClient:
             conflict_metadata[key] = value
 
         return conflict_metadata
+
+    # TODO problem with doing it this way is that we won't be able to expose which parameters are doing what!
+
+    def _write(
+        self,
+        table_name: str,
+        data,
+        on_data_conflict: str = "fail",
+        on_asset_conflict: str = "append",
+        data_conflict_properties: List[str] | None = None,
+    ):
+        """_summary_
+
+        :param table_name: _description_
+        :type table_name: _type_
+        :param data: _description_
+        :type data: _type_
+        :param on_asset_conflict: _description_
+        :type on_asset_conflict: _type_
+        :param on_data_conflict: _description_
+        :type on_data_conflict: _type_
+        :param data_conflict_properties: _description_
+        :type data_conflict_properties: _type_
+        :raises NotImplementedError: _description_
+        :raises NotImplementedError: _description_
+        :raises NotImplementedError: _description_
+        :return: _description_
+        :rtype: _type_
+        """
+
+        # TODO this mapping should be made into a global variable and exposed as an endpoint so user can know what each thing means in context of each client
+        resp = self.create_events(
+            calendar_id=table_name,
+            events=data,
+            on_asset_conflict=on_asset_conflict,
+            on_data_conflict=on_data_conflict,
+            data_conflict_properties=data_conflict_properties,
+        )
+
+        return resp
 
     # calendar_id is what? not the database, because database should be fixed per connection
     # could be the dataset, OR table_name. But in this case, table_name makes more sense
@@ -422,7 +459,7 @@ class GoogleCalendarClient:
 
             if num_failed_writes == num_events_to_create:
                 _msg = "None of the events were successfully created due to write errors"
-                logger.error()
+                logger.error(_msg)
                 return_msg.update(
                     {
                         "msg": _msg,
@@ -448,8 +485,6 @@ class GoogleCalendarClient:
                 )
 
         return return_msg
-
-    # should always return a json wherever possible! And add a status code too!
 
 
 if __name__ == "__main__":
