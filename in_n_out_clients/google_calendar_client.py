@@ -19,7 +19,7 @@ from in_n_out_clients.in_n_out_types import (
     ConflictResolutionStrategy,
 )
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
@@ -156,7 +156,10 @@ class GoogleCalendarClient:
         return calendars
 
     def _generate_events_conflict_metadata(self, event_conflict_identifiers):
-        CONFLICT_PROPERTIES_MAP = {"summary": lambda x: ("q", x)}
+        CONFLICT_PROPERTIES_MAP = {
+            "summary": lambda x: ("q", x),
+            "iCalUID": lambda x: ("iCalUID", x),
+        }
 
         conflict_metadata = {}
         for (
@@ -167,7 +170,9 @@ class GoogleCalendarClient:
                 conflict_property
             )
             if conflict_query_generator is None:
-                raise NotImplementedError()
+                raise NotImplementedError(
+                    f"Tried to find conflicts using calendar metadata `{conflict_property}` but there is currently no support for this"
+                )
 
             key, value = conflict_query_generator(conflict_value)
             if key in conflict_metadata:
@@ -287,7 +292,7 @@ class GoogleCalendarClient:
                         "on_asset_conflict=`ignore`"
                     )
                     logger.info(_msg)
-                    return {"status_code": 204, "msg": _msg}
+                    return {"status_code": 200, "msg": _msg}
                 case ConflictResolutionStrategy.REPLACE:
                     _msg = f"calendar with calendar_id=`{calendar_id}` exists and on_asset_conflict=`{on_asset_conflict}`. There is currently no support for this."
                     # need to delete the calendar, then create a new calendar!
@@ -339,9 +344,14 @@ class GoogleCalendarClient:
                 logger.debug(
                     f"Searching calendar_id=`{calendar_id}` for events with the following properties: {_data_conflict_properties}"
                 )
-                event_list = events_session.list(
-                    calendarId=calendar_id, **conflict_metadata
-                ).execute()
+                try:
+                    event_list = events_session.list(
+                        calendarId=calendar_id, **conflict_metadata
+                    ).execute()
+                except HttpError as http_error:
+                    raise Exception(
+                        f"There was a failure in looking for conflicts for event_id=`{event_id}`. Reason: {http_error}"
+                    ) from http_error
 
                 conflicting_events = event_list["items"]
                 num_conflicting_events = len(conflicting_events)
@@ -389,6 +399,10 @@ class GoogleCalendarClient:
                                     "id_of_events_that_conflict": conflicting_event_ids,
                                 }
                             )
+                else:
+                    logger.info(
+                        f"Did not find any conflicts for event_id=`{event_id}`"
+                    )
 
                 # if there is a conflict, then
             # check that the input events contain the on conflict columns

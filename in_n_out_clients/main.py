@@ -90,6 +90,8 @@ class InNOutClient:
             if param_value is not None
         }
 
+        connection_params.update(nullable_params)
+
         logger.info(f"Connecting to `{database_type}` client...")
         self.client = self._connect_to_client(
             database_type=database_type, connection_params=connection_params
@@ -109,15 +111,13 @@ class InNOutClient:
         :param database_type: type of service to connect to
         :param connection_params: connection params to the service
         """
-        client = DATABASE_TYPE_TO_CLIENT_MAPPING.get(database_type)[
-            "client_class"
-        ]
+        client = DATABASE_TYPE_TO_CLIENT_MAPPING.get(database_type)
         if client is None:
-            raise ValueError(
-                f"database_type={database_type} is not a valid type"
+            raise NotImplementedError(
+                f"database_type={database_type} is not a valid client"
             )
-
-        client_instance = client(**connection_params)
+        client_class = client["client_class"]
+        client_instance = client_class(**connection_params)
         return client_instance
 
     def create_asset(self):
@@ -136,6 +136,7 @@ class InNOutClient:
         data,
         dataset_name: str | None = None,
         on_data_conflict: str = "append",
+        on_asset_conflict: str = "append",
         data_conflict_properties: list | None = None,
     ):
         """Generic function to write data to any resource. Note that the purpose
@@ -146,6 +147,8 @@ class InNOutClient:
         :param dataset_name: name of the dataset to write to, if any,
             defaults to None
         :param on_data_conflict: how to behave if there is a conflict,
+            defaults to "append"
+        :param on_asset_conflict: how to behave if there is an asset conflict,
             defaults to "append"
         :param data_conflict_properties: what properties to check for conflicts
 
@@ -164,6 +167,7 @@ class InNOutClient:
             "dataset_name": dataset_name,
             "on_data_conflict": on_data_conflict,
             "data_conflict_properties": data_conflict_properties,
+            "on_asset_conflict": on_asset_conflict,
         }
 
         write_method_params = DATABASE_TYPE_TO_CLIENT_MAPPING[
