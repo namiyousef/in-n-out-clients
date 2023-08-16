@@ -1,3 +1,3 @@
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
 from in_n_out_clients.main import InNOutClient

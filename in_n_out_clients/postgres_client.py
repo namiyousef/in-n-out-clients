@@ -1,7 +1,14 @@
+import logging
+from typing import List
+
 import pandas as pd
 import sqlalchemy as db
 from pandas.api.types import is_datetime64tz_dtype
 from sqlalchemy import BOOLEAN, FLOAT, INTEGER, TIMESTAMP, VARCHAR
+
+from in_n_out_clients.in_n_out_types import ConflictResolutionStrategy
+
+logger = logging.getLogger(__file__)
 
 
 class PostgresClient:
@@ -50,6 +57,7 @@ class PostgresClient:
         on_data_conflict: str = "append",
         on_asset_conflict: str = "append",
         dataset_name: str | None = None,
+        data_conflict_properties: List[str] | None = None
         # data_conflict_properties,
     ):
         resp = self.write(
@@ -57,6 +65,8 @@ class PostgresClient:
             table_name=table_name,
             dataset_name=dataset_name,
             on_asset_conflict=on_asset_conflict,
+            on_data_conflict=on_data_conflict,
+            data_conflict_properties=data_conflict_properties,
         )
 
         return resp
@@ -68,6 +78,8 @@ class PostgresClient:
         table_name: str,
         dataset_name: str,
         on_asset_conflict: str,
+        on_data_conflict: str,
+        data_conflict_properties: List[str] | None = None,
     ):
         DTYPE_MAP = {
             "int64": INTEGER,
@@ -88,6 +100,55 @@ class PostgresClient:
             return dtypes
 
         dtypes = _get_pg_datatypes(df)
+
+        if on_data_conflict != ConflictResolutionStrategy.APPEND:
+            if on_data_conflict == ConflictResolutionStrategy.REPLACE:
+                raise NotImplementedError(
+                    "There is currently no support for replace strategy"
+                )
+            if data_conflict_properties is None:
+                data_conflict_properties = df.columns.tolist()
+
+            select_columns = ",".join(data_conflict_properties)
+            df_from_db = self.query(
+                f"SELECT DISTINCT {select_columns} FROM {table_name}"
+            )
+
+            df = df.merge(df_from_db, how="left", indicator=True)
+
+            df_conflicting_rows = df[df["_merge"] == "both"]
+            df = df[df["_merge"] != "both"].drop("_merge", axis=1)
+
+            if not df_conflicting_rows.empty:
+                num_conflicting_rows = df_conflicting_rows.shape[0]
+                logger.info(f"Found {num_conflicting_rows}...")
+                match on_data_conflict:
+                    case ConflictResolutionStrategy.FAIL:
+                        logger.error(
+                            "Exiting process since on_data_conflict=fail"
+                        )
+                        return {
+                            "status_code": 409,
+                            "msg": f"Found {num_conflicting_rows} that conflict",
+                            "data": [
+                                {
+                                    "data_conflict_properties": (
+                                        data_conflict_properties
+                                    ),
+                                    "first_5_conflicting_rows": (
+                                        df_conflicting_rows.head()
+                                        .astype(str)
+                                        .to_dict(orient="records")
+                                    ),
+                                }
+                            ],
+                        }
+                    case ConflictResolutionStrategy.IGNORE:
+                        logger.info("Ignoring conflicting rows...")
+            else:
+                logger.info(
+                    "No conflicts found... proceeding with normal write process"
+                )
 
         df.to_sql(
             table_name,
