@@ -35,7 +35,7 @@ with open("requirements/extra.json", "r") as f:
     extras_require = json.load(f)
 
 setup(
-    name="in_n_out_clients",
+    name="in-n-out-clients",
     version=get_version("in_n_out_clients/__init__.py"),
     description="Clients for In-N-Out",
     author="Yousef Nami",
