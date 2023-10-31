@@ -38,6 +38,7 @@ setup(
     name="in-n-out-clients",
     version=get_version("in_n_out_clients/__init__.py"),
     description="Clients for In-N-Out",
+    long_description="dummy",
     author="Yousef Nami",
     author_email="namiyousef@hotmail.com",
     url="https://github.com/namiyousef/in-n-out-clients",
