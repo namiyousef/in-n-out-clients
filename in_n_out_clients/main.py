@@ -57,13 +57,19 @@ for database_type in DATABASE_TYPE_TO_CLIENT_MAPPING:
 
 
 class InNOutClient:
-    """Universal CLient to connect to different services
-    :param database_type: type of service to connect to
-    :param database_name: name of the service to connect to, if applicable
-    :param password: password of the service to connect to, if applicable
-    :param username: username of the service to connect to, if applicable
-    :param host: host of the service to connect to, if applicable
-    :param port: port of the service to connect to, if applicable
+    """Universal CLient to connect to different services :param database_type:
+
+    type of service to connect to
+    :param database_name: name of the service to
+    connect to, if applicable
+    :param password: password of the service to
+    connect to, if applicable
+    :param username: username of the service to
+    connect to, if applicable
+    :param host: host of the service to connect to,
+    if applicable
+    :param port: port of the service to connect to, if
+    applicable.
     """
 
     def __init__(
@@ -106,7 +112,7 @@ class InNOutClient:
 
     # should raise an error if fails
     def _connect_to_client(self, database_type: str, connection_params: dict):
-        """Function to connect to a client
+        """Function to connect to a client.
 
         :param database_type: type of service to connect to
         :param connection_params: connection params to the service
@@ -139,8 +145,8 @@ class InNOutClient:
         on_asset_conflict: str = "append",
         data_conflict_properties: list | None = None,
     ):
-        """Generic function to write data to any resource. Note that the purpose
-        of this is solely to write data to an existing resource.
+        """Generic function to write data to any resource. Note that the
+        purpose of this is solely to write data to an existing resource.
 
         :param table_name: name of the table to write data to
         :param data: the data to write, can be of any format

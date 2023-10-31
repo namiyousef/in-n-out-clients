@@ -234,14 +234,23 @@ class GoogleCalendarClient:
         data_conflict_properties: list | None = None,
         create_calendar_if_not_exist: bool = False,  # how to specify HOW to create the calendar...!
     ) -> APIResponse:
-        """Function to add events to a calendar
+        """Function to add events to a calendar.
 
-        :param calendar_id: id of the calendar. See calendar resource for more information: https://developers.google.com/calendar/api/v3/reference/calendars
-        :param events: events to create. See for more information: https://developers.google.com/calendar/api/v3/reference/events/insert
-        :param on_asset_conflict: specify behaviour if calendar_id already exists, defaults to "ignore"
+        :param calendar_id: id of the calendar. See calendar resource
+        for more information:
+        https://developers.google.com/calendar/api/v3/reference/calendars
+         :param events: events to create. See for more information:
+        https://developers.google.com/calendar/api/v3/reference/events/insert
+        :param calendar_id: id of the calendar. See calendar resource for more information
+        : https: //developers.google.com/calendar/api/v3/reference/calendars
+        :param events: events to create. See for more information
+        : https: //developers.google.com/calendar/api/v3/reference/events/insert
+        :param on_asset_conflict: specify behaviour if calendar_id
+                already exists, defaults to "ignore"
         :param on_data_conflict: specify behaviour if event already exists, defaults to "ignore"
         :param data_conflict_properties: event properties to check for conflicts, defaults to None
-        :param create_calendar_if_not_exist: flag to create a calendar if it does not already exist, defaults to False
+        :param create_calendar_if_not_exist: flag to create a calendar
+                if it does not already exist, defaults to False
         """
         try:
             calendars = self._get_calendars()
