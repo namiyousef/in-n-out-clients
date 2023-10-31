@@ -11,6 +11,13 @@ from in_n_out_clients.in_n_out_types import ConflictResolutionStrategy
 logger = logging.getLogger(__file__)
 
 
+class OnDataConflictFail(Exception):
+    """Raised when there are conflicts in the data if on_data_conflict is
+    ConflictResolutionStrategy.FAIL."""
+
+    pass
+
+
 class PostgresClient:
     def __init__(
         self,
@@ -101,8 +108,36 @@ class PostgresClient:
 
         dtypes = _get_pg_datatypes(df)
 
+        # -- define behavior:
+        # if on_data_conflict !=APPEND, AND no conflict columns provided...!
+        # Rejects this altogether. Do not want to allow this case
+        # We would be making the behaviour ambiguous.
+        # -- if we have provided conflict columns, then as per postgres
         if on_data_conflict != ConflictResolutionStrategy.APPEND:
-            if on_data_conflict == ConflictResolutionStrategy.REPLACE:
+            method = partial(
+                insert_with_conflict_resolution,
+                on_data_conflict=on_data_conflict,
+                data_conflict_properties=data_conflict_properties,
+            )
+        else:
+            method = "multi"
+
+        try:
+            df.to_sql(
+                table_name,
+                self.con,
+                schema=dataset_name,
+                if_exists=on_asset_conflict,
+                index=False,
+                method=method,
+                dtype=dtypes,
+            )
+        except OnDataConflictFail as on_data_conflict_fail:
+            logger.error("Exiting process since on_data_conflict=fail")
+            return {"status_code": 409, **on_data_conflict_fail.args[0]}
+
+            # -- below is the old method for conflict resolution!
+            """if on_data_conflict == ConflictResolutionStrategy.REPLACE:
                 raise NotImplementedError(
                     "There is currently no support for replace strategy"
                 )
@@ -148,7 +183,7 @@ class PostgresClient:
             else:
                 logger.info(
                     "No conflicts found... proceeding with normal write process"
-                )
+                )"""
 
         df.to_sql(
             table_name,
@@ -161,3 +196,99 @@ class PostgresClient:
         )
 
         return {"status_code": 200, "msg": "successfully wrote data"}
+
+
+def insert_with_conflict_resolution(
+    table, conn, keys, data_iter, on_data_conflict, data_conflict_properties
+):
+    from sqlalchemy.dialects.postgresql import insert
+
+    data = [dict(zip(keys, row, strict=True)) for row in data_iter]
+
+    insert_statement = insert(table.table).values(data)
+
+    match on_data_conflict:
+        case ConflictResolutionStrategy.REPLACE:
+            # def _exclude_columns(column):
+            #    pass
+
+            stmt = insert_statement.on_conflict_do_update(
+                index_elements=data_conflict_properties,
+                set_={
+                    c.key: c
+                    for c in insert_statement.excluded
+                    if c not in data_conflict_properties
+                },
+            )
+        case _:
+            stmt = insert_statement.on_conflict_do_nothing(
+                index_elements=data_conflict_properties
+            )
+
+    result = conn.execute(stmt)
+    num_results = result.rowcount
+
+    if on_data_conflict == ConflictResolutionStrategy.FAIL:
+        if num_results != len(data):
+            conn.rollback()
+            raise OnDataConflictFail(
+                {
+                    "msg": f"Found {len(data) - num_results} conflicting rows",
+                    "data": [
+                        {
+                            "data_conflict_properties": (
+                                data_conflict_properties
+                            ),
+                            "first_5_conflicting_rows": (str(data[:5])),
+                        }
+                    ],
+                }
+            )
+
+    return num_results
+
+
+def postgres_fail():
+    pass
+
+
+if __name__ == "__main__":
+    client = PostgresClient(
+        "postgres", "postgres", "localhost", 5432, "postgres"
+    )
+
+    from functools import partial
+
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "currency": ["EUR", "GBP"],
+            "date": ["2025-01-01", "2024-01-01"],
+            "value_in_pounds": [-1, 0.9],
+        }
+    ).astype({"date": "datetime64[ns]"})
+    print(
+        client.write(
+            df,
+            "currency_history",
+            "public",
+            "append",
+            "fail",
+            ["currency", "date"],
+        )
+    )
+    raise Exception()
+    df.to_sql(
+        "currency_history",
+        client.con,
+        schema="public",
+        if_exists="append",
+        index=False,
+        method=partial(
+            insert_with_conflict_resolution,
+            data_conflict_properties=["currency", "date"],
+            on_data_conflict="fail",
+        ),
+        chunksize=1,
+    )
