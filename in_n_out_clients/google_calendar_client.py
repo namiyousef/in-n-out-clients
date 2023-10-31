@@ -1,6 +1,5 @@
 from __future__ import print_function
 
-import datetime
 import logging
 import os.path
 from typing import List
@@ -20,7 +19,7 @@ from in_n_out_clients.in_n_out_types import (
     ConflictResolutionStrategy,
 )
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
@@ -86,7 +85,7 @@ class GoogleCalendarClient:
                 for conflict_key in data_conflict_properties
             }
         except KeyError as key_error:
-            raise Exception()
+            raise Exception() from key_error  # TODO revisit this
         else:
             unique_identifier = tuple(unique_keys.values())
             return unique_identifier
@@ -139,6 +138,7 @@ class GoogleCalendarClient:
                             .update(calendarId=calendar["id"], body=body)
                             .execute()
                         )
+                        print(updated_calendar)
 
                     if on_data_conflict == "ignore":
                         pass
@@ -147,6 +147,7 @@ class GoogleCalendarClient:
                         pass
 
         created_calendar = self.client.calendars().insert(body=body).execute()
+        print(created_calendar)
 
     def _get_calendars(self):
         logger.info("Getting list of calendar available...")
@@ -155,7 +156,10 @@ class GoogleCalendarClient:
         return calendars
 
     def _generate_events_conflict_metadata(self, event_conflict_identifiers):
-        CONFLICT_PROPERTIES_MAP = {"summary": lambda x: ("q", x)}
+        CONFLICT_PROPERTIES_MAP = {
+            "summary": lambda x: ("q", x),
+            "iCalUID": lambda x: ("iCalUID", x),
+        }
 
         conflict_metadata = {}
         for (
@@ -166,7 +170,9 @@ class GoogleCalendarClient:
                 conflict_property
             )
             if conflict_query_generator is None:
-                raise NotImplementedError()
+                raise NotImplementedError(
+                    f"Tried to find conflicts using calendar metadata `{conflict_property}` but there is currently no support for this"
+                )
 
             key, value = conflict_query_generator(conflict_value)
             if key in conflict_metadata:
@@ -228,14 +234,23 @@ class GoogleCalendarClient:
         data_conflict_properties: list | None = None,
         create_calendar_if_not_exist: bool = False,  # how to specify HOW to create the calendar...!
     ) -> APIResponse:
-        """Function to add events to a calendar
+        """Function to add events to a calendar.
 
-        :param calendar_id: id of the calendar. See calendar resource for more information: https://developers.google.com/calendar/api/v3/reference/calendars
-        :param events: events to create. See for more information: https://developers.google.com/calendar/api/v3/reference/events/insert
-        :param on_asset_conflict: specify behaviour if calendar_id already exists, defaults to "ignore"
+        :param calendar_id: id of the calendar. See calendar resource
+        for more information:
+        https://developers.google.com/calendar/api/v3/reference/calendars
+         :param events: events to create. See for more information:
+        https://developers.google.com/calendar/api/v3/reference/events/insert
+        :param calendar_id: id of the calendar. See calendar resource for more information
+        : https: //developers.google.com/calendar/api/v3/reference/calendars
+        :param events: events to create. See for more information
+        : https: //developers.google.com/calendar/api/v3/reference/events/insert
+        :param on_asset_conflict: specify behaviour if calendar_id
+                already exists, defaults to "ignore"
         :param on_data_conflict: specify behaviour if event already exists, defaults to "ignore"
         :param data_conflict_properties: event properties to check for conflicts, defaults to None
-        :param create_calendar_if_not_exist: flag to create a calendar if it does not already exist, defaults to False
+        :param create_calendar_if_not_exist: flag to create a calendar
+                if it does not already exist, defaults to False
         """
         try:
             calendars = self._get_calendars()
@@ -286,7 +301,7 @@ class GoogleCalendarClient:
                         "on_asset_conflict=`ignore`"
                     )
                     logger.info(_msg)
-                    return {"status_code": 204, "msg": _msg}
+                    return {"status_code": 200, "msg": _msg}
                 case ConflictResolutionStrategy.REPLACE:
                     _msg = f"calendar with calendar_id=`{calendar_id}` exists and on_asset_conflict=`{on_asset_conflict}`. There is currently no support for this."
                     # need to delete the calendar, then create a new calendar!
@@ -309,9 +324,7 @@ class GoogleCalendarClient:
 
         events_session = self.client.events()
 
-        events_to_create = {
-            event_id: event for event_id, event in enumerate(events)
-        }
+        events_to_create = dict(enumerate(events))
         num_events_to_create = len(events_to_create)
         logger.info(f"Got {num_events_to_create} events to write")
 
@@ -340,9 +353,14 @@ class GoogleCalendarClient:
                 logger.debug(
                     f"Searching calendar_id=`{calendar_id}` for events with the following properties: {_data_conflict_properties}"
                 )
-                event_list = events_session.list(
-                    calendarId=calendar_id, **conflict_metadata
-                ).execute()
+                try:
+                    event_list = events_session.list(
+                        calendarId=calendar_id, **conflict_metadata
+                    ).execute()
+                except HttpError as http_error:
+                    raise Exception(
+                        f"There was a failure in looking for conflicts for event_id=`{event_id}`. Reason: {http_error}"
+                    ) from http_error
 
                 conflicting_events = event_list["items"]
                 num_conflicting_events = len(conflicting_events)
@@ -359,11 +377,16 @@ class GoogleCalendarClient:
                     match on_data_conflict:
                         case ConflictResolutionStrategy.FAIL:
                             logger.error(
-                                f"Exiting process since on_data_conflict=`fail`..."
+                                (
+                                    "Exiting process since "
+                                    "on_data_conflict=`fail`..."
+                                )
                             )
                             return {
                                 "status_code": 409,
-                                "msg": f"At least one event to write conflicts with events from calendar=`{calendar_id}` on the following conflict properties `{data_conflict_properties}`",
+                                "msg": (
+                                    f"At least one event to write conflicts with events from calendar=`{calendar_id}` on the following conflict properties `{data_conflict_properties}`"
+                                ),
                                 "data": [
                                     {
                                         "event_to_write": event,
@@ -385,6 +408,10 @@ class GoogleCalendarClient:
                                     "id_of_events_that_conflict": conflicting_event_ids,
                                 }
                             )
+                else:
+                    logger.info(
+                        f"Did not find any conflicts for event_id=`{event_id}`"
+                    )
 
                 # if there is a conflict, then
             # check that the input events contain the on conflict columns

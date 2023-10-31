@@ -1,0 +1,7 @@
+{
+    "test": [
+        "pre-commit",
+        "pytest",
+        "coverage"
+    ]
+}

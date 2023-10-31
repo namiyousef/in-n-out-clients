@@ -40,22 +40,25 @@ class EmailClient:
     def _infer_smtp_settings(self):
         try:
             smtp_settings = SMTP_SETTINGS[self.provider]
-        except KeyError as e:
+        except KeyError as key_error:
             raise ValueError(
                 (
                     f"Provider `{self.provider}` is not an acceptable type. "
                     f"Please choose a provider from the following "
                     f"{tuple(SMTP_SETTINGS.keys())}."
                 )
-            )
+            ) from key_error
 
         try:
             self.server_address = smtp_settings["server_address"]
             self.port = smtp_settings["port"][self.connection_strategy]
-        except KeyError as e:
+        except KeyError as key_error:
             raise ValueError(
-                f"Provider `{self.provider}` does not support `{self.connection_strategy}` connection strategy"
-            )
+                (
+                    f"Provider `{self.provider}` does not support "
+                    f"`{self.connection_strategy}` connection strategy"
+                )
+            ) from key_error
 
     @property
     def build_message(self):
@@ -98,7 +101,10 @@ class EmailClient:
 
     def send_email(self):
         logger.info(
-            f"Starting `{self.connection_strategy}` connection to `{self.provider} SMTP server...`"
+            (
+                f"Starting `{self.connection_strategy}` connection to "
+                f"`{self.provider} SMTP server...`"
+            )
         )
 
         session = getattr(self, f"_connect_{self.connection_strategy}")()

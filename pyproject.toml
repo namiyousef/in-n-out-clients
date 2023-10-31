@@ -6,3 +6,6 @@ include = '\.pyi?$'
 [tool.isort]
 profile = "black"
 line_length = 79
+
+[tool.docformatter]
+black = true
