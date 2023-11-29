@@ -1,5 +1,6 @@
 import datetime
 import logging
+from functools import partial
 from typing import List
 
 import pandas as pd
@@ -296,8 +297,6 @@ if __name__ == "__main__":
     client = PostgresClient(
         "postgres", "postgres", "localhost", 5432, "postgres"
     )
-
-    from functools import partial
 
     import pandas as pd
 
