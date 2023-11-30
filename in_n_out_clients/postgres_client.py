@@ -10,6 +10,15 @@ from sqlalchemy import BOOLEAN, FLOAT, INTEGER, TIMESTAMP, VARCHAR
 
 from in_n_out_clients.in_n_out_types import ConflictResolutionStrategy
 
+# -- default values for use in upsert query when partial data provided: see
+# `insert_with_conflict_resolution`
+DEFAULT_VALUES_FOR_SQLALCHEMY_TYPES = {
+    VARCHAR: "string",
+    INTEGER: -1,
+    FLOAT: -1.1,
+    BOOLEAN: False,
+}
+
 logger = logging.getLogger(__file__)
 
 
@@ -238,54 +247,66 @@ class PostgresClient:
 def insert_with_conflict_resolution(
     table, conn, keys, data_iter, on_data_conflict, data_conflict_properties
 ):
+    from sqlalchemy import Column, inspect
     from sqlalchemy.dialects.postgresql import insert
-
-    # from sqlalchemy import inspect, MetaData, Table, Column
-    # from sqlalchemy.orm import DeclarativeBase
-    # class Base(DeclarativeBase):
-    #    pass
-    # class Table(Base):
-    #    __tablename__ = "merchants"
-    #
-    #    merchant_name = Column("merchant_name", primary_key=True)
 
     data = [dict(zip(keys, row, strict=True)) for row in data_iter]
 
-    # existing_columns = [c.key for c in table.table.c]
-    # all_columns = inspect(conn).get_columns(table.table.name)
-    # filtered_columns = [
-    #    {"type_": col.pop("type"), **col}
-    #    for col in all_columns
-    #    if col["name"] not in existing_columns
-    # ]
-    # print(filtered_columns)
-    # cleaned_columns = []
-    # for filtered_column in filtered_columns:
-    #    is_nullable = filtered_column["nullable"]
-    #    has_default = filtered_column["default"]
-    #    if not is_nullable and has_default is None:
-    #        filtered_column["default"] = "None"
-    #    cleaned_columns.append(filtered_column)
+    sqlalchemy_table = table.table
+    table_name = sqlalchemy_table.name
 
-    # sqlalchemy_columns = [Column(**col) for col in cleaned_columns]
-    # for sqlalchemy_column in sqlalchemy_columns:
-    #    table.table.append_column(sqlalchemy_column)
+    insert_statement = insert(sqlalchemy_table).values(data)
 
-    insert_statement = insert(table.table).values(data)
+    all_columns = inspect(conn).get_columns(table_name)
+    non_nullable_cols_with_no_default = []
+    for column_metadata in all_columns:
+        column_name = column_metadata["name"]
+        is_nullable = column_metadata["nullable"]
+        has_default = column_metadata["default"]
+        if column_name in keys:
+            continue
+        if not is_nullable and has_default is None:
+            logger.debug(
+                (
+                    f"Detected column `{column_name}` that is not present in "
+                    "data, is not nullable and has no default value... adding "
+                    "default value for purpose of upsert"
+                )
+            )
+            column_type = column_metadata.pop("type")
+            _type_class = column_type.__class__
+            default_value = DEFAULT_VALUES_FOR_SQLALCHEMY_TYPES.get(
+                _type_class
+            )
+            if default_value is None:
+                logger.warning(
+                    (
+                        f"Column `{column_name}` has type {column_type} which "
+                        "has no default-value inference support for the "
+                        "purposes of upsert. Aborting partial column upsert..."
+                    )
+                )
+                non_nullable_cols_with_no_default = []
+                break
+            column_metadata["default"] = default_value
+            column_metadata["type_"] = column_type
+
+            sqlalchemy_column = Column(**column_metadata)
+            non_nullable_cols_with_no_default.append(sqlalchemy_column)
+
+    for sqlalchemy_column in non_nullable_cols_with_no_default:
+        sqlalchemy_table.append_column(sqlalchemy_column)
 
     match on_data_conflict:
         case ConflictResolutionStrategy.REPLACE:
-            # def _exclude_columns(column):
-            #    pass
-
             set_query = {
                 c.key: c
                 for c in insert_statement.excluded
                 if c.key not in data_conflict_properties
             }
 
-            # for col in sqlalchemy_columns:
-            #    set_query[col.key] = col
+            for col in non_nullable_cols_with_no_default:
+                set_query[col.key] = col
 
             stmt = insert_statement.on_conflict_do_update(
                 index_elements=data_conflict_properties,
