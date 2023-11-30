@@ -240,7 +240,36 @@ def insert_with_conflict_resolution(
 ):
     from sqlalchemy.dialects.postgresql import insert
 
+    # from sqlalchemy import inspect, MetaData, Table, Column
+    # from sqlalchemy.orm import DeclarativeBase
+    # class Base(DeclarativeBase):
+    #    pass
+    # class Table(Base):
+    #    __tablename__ = "merchants"
+    #
+    #    merchant_name = Column("merchant_name", primary_key=True)
+
     data = [dict(zip(keys, row, strict=True)) for row in data_iter]
+
+    # existing_columns = [c.key for c in table.table.c]
+    # all_columns = inspect(conn).get_columns(table.table.name)
+    # filtered_columns = [
+    #    {"type_": col.pop("type"), **col}
+    #    for col in all_columns
+    #    if col["name"] not in existing_columns
+    # ]
+    # print(filtered_columns)
+    # cleaned_columns = []
+    # for filtered_column in filtered_columns:
+    #    is_nullable = filtered_column["nullable"]
+    #    has_default = filtered_column["default"]
+    #    if not is_nullable and has_default is None:
+    #        filtered_column["default"] = "None"
+    #    cleaned_columns.append(filtered_column)
+
+    # sqlalchemy_columns = [Column(**col) for col in cleaned_columns]
+    # for sqlalchemy_column in sqlalchemy_columns:
+    #    table.table.append_column(sqlalchemy_column)
 
     insert_statement = insert(table.table).values(data)
 
@@ -249,13 +278,18 @@ def insert_with_conflict_resolution(
             # def _exclude_columns(column):
             #    pass
 
+            set_query = {
+                c.key: c
+                for c in insert_statement.excluded
+                if c.key not in data_conflict_properties
+            }
+
+            # for col in sqlalchemy_columns:
+            #    set_query[col.key] = col
+
             stmt = insert_statement.on_conflict_do_update(
                 index_elements=data_conflict_properties,
-                set_={
-                    c.key: c
-                    for c in insert_statement.excluded
-                    if c not in data_conflict_properties
-                },
+                set_=set_query,
             )
         case _:
             stmt = insert_statement.on_conflict_do_nothing(
