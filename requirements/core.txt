@@ -4,4 +4,4 @@ google-auth-oauthlib
 psycopg2-binary
 PyDrive2
 pandas
-SQLAlchemy
+SQLAlchemy  # requires new version for conn.rollback()

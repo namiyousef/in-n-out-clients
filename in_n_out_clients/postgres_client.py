@@ -1,5 +1,6 @@
 import datetime
 import logging
+from functools import partial
 from typing import List
 
 import pandas as pd
@@ -8,6 +9,15 @@ from pandas.api.types import is_datetime64tz_dtype
 from sqlalchemy import BOOLEAN, FLOAT, INTEGER, TIMESTAMP, VARCHAR
 
 from in_n_out_clients.in_n_out_types import ConflictResolutionStrategy
+
+# -- default values for use in upsert query when partial data provided: see
+# `insert_with_conflict_resolution`
+DEFAULT_VALUES_FOR_SQLALCHEMY_TYPES = {
+    VARCHAR: "string",
+    INTEGER: -1,
+    FLOAT: -1.1,
+    BOOLEAN: False,
+}
 
 logger = logging.getLogger(__file__)
 
@@ -234,6 +244,63 @@ class PostgresClient:
         return {"status_code": 200, "msg": "successfully wrote data"}
 
 
+def _generate_default_cols_when_partial_data(
+    conn, table_name: str, columns_in_data: List[str]
+):
+    """Internal function to add default values to non-nullable columns without
+    defaults from the target table in case where write data has partial
+    columns.
+
+    :param conn: SQLAlchemy connection
+    :param table_name: name of the target table
+    :param columns_in_data: these are the columns present in the `write`
+        data, the function will ignore these columns
+    :return: a list containing the metadata (to be directly used by
+        `sqlalchemy.Column`) of all columns from the target table that
+        by definition have no defaults and are not nullable with data-
+        type inferred defaults (excludes columns present in data)
+    """
+    from sqlalchemy import Column, inspect
+
+    all_columns = inspect(conn).get_columns(table_name)
+    non_nullable_cols_with_no_default = []
+    for column_metadata in all_columns:
+        column_name = column_metadata["name"]
+        is_nullable = column_metadata["nullable"]
+        has_default = column_metadata["default"]
+        if column_name in columns_in_data:
+            continue
+        if not is_nullable and has_default is None:
+            logger.debug(
+                (
+                    f"Detected column `{column_name}` that is not present in "
+                    "data, is not nullable and has no default value... adding "
+                    "default value for purpose of upsert"
+                )
+            )
+            column_type = column_metadata.pop("type")
+            _type_class = column_type.__class__
+            default_value = DEFAULT_VALUES_FOR_SQLALCHEMY_TYPES.get(
+                _type_class
+            )
+            if default_value is None:
+                logger.warning(
+                    (
+                        f"Column `{column_name}` has type {column_type} which "
+                        "has no default-value inference support for the "
+                        "purposes of upsert. Aborting partial column upsert..."
+                    )
+                )
+                non_nullable_cols_with_no_default = []
+                break
+            column_metadata["default"] = default_value
+            column_metadata["type_"] = column_type
+
+            sqlalchemy_column = Column(**column_metadata)
+            non_nullable_cols_with_no_default.append(sqlalchemy_column)
+    return non_nullable_cols_with_no_default
+
+
 def insert_with_conflict_resolution(
     table, conn, keys, data_iter, on_data_conflict, data_conflict_properties
 ):
@@ -241,20 +308,35 @@ def insert_with_conflict_resolution(
 
     data = [dict(zip(keys, row, strict=True)) for row in data_iter]
 
-    insert_statement = insert(table.table).values(data)
+    sqlalchemy_table = table.table
+    table_name = sqlalchemy_table.name
+
+    insert_statement = insert(sqlalchemy_table).values(data)
+
+    # -- find columns that need to be added to insert query in case of
+    # partial data
+    non_nullable_cols_with_no_default = (
+        _generate_default_cols_when_partial_data(
+            conn=conn, table_name=table_name, columns_in_data=keys
+        )
+    )
+    for sqlalchemy_column in non_nullable_cols_with_no_default:
+        sqlalchemy_table.append_column(sqlalchemy_column)
 
     match on_data_conflict:
         case ConflictResolutionStrategy.REPLACE:
-            # def _exclude_columns(column):
-            #    pass
+            set_query = {
+                c.key: c
+                for c in insert_statement.excluded
+                if c.key not in data_conflict_properties
+            }
+
+            for col in non_nullable_cols_with_no_default:
+                set_query[col.key] = col
 
             stmt = insert_statement.on_conflict_do_update(
                 index_elements=data_conflict_properties,
-                set_={
-                    c.key: c
-                    for c in insert_statement.excluded
-                    if c not in data_conflict_properties
-                },
+                set_=set_query,
             )
         case _:
             stmt = insert_statement.on_conflict_do_nothing(
@@ -296,8 +378,6 @@ if __name__ == "__main__":
     client = PostgresClient(
         "postgres", "postgres", "localhost", 5432, "postgres"
     )
-
-    from functools import partial
 
     import pandas as pd
 
