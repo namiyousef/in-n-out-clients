@@ -1,6 +1,9 @@
 import base64
 import logging
+import mimetypes
 import os
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List, Optional, TypedDict, Union
 
@@ -147,10 +150,11 @@ class GmailClient:
         bcc: Optional[Union[str, List[str]]] = None,
         subject: Optional[str] = None,
         in_reply_to_msgid: Optional[str] = None,
+        attachments: Optional[List[str]] = None,
         create_draft: bool = True,
     ) -> dict:
         # TODO chatgpt output. Re-write and clean
-        """Compose a reply in the given `thread_id`.
+        """Compose a reply in the given `thread_id` with optional attachments.
 
         - If `in_reply_to_msgid` or `to_address` or `subject` are not provided,
           the method will fetch the thread and use the most recent message's
@@ -162,7 +166,17 @@ class GmailClient:
           - To create drafts/send messages: `https://www.googleapis.com/auth/gmail.compose` or `gmail.send`
           - To modify labels: `https://www.googleapis.com/auth/gmail.modify`
 
-        Returns the API response from `drafts().create()` or `messages().send()`.
+        :param thread_id: Gmail thread ID
+        :param body_text: Reply body text
+        :param to: Recipient(s) - string or list of email addresses
+        :param to_address: (Deprecated) Use `to` instead
+        :param cc: CC recipient(s) - string or list
+        :param bcc: BCC recipient(s) - string or list
+        :param subject: Reply subject (auto-prefixed with Re: if needed)
+        :param in_reply_to_msgid: Message ID to reply to (auto-fetched if None)
+        :param attachments: List of file paths to attach
+        :param create_draft: Create draft (True) or send immediately (False)
+        :return: API response from drafts().create() or messages().send()
         """
         # If necessary, fetch thread to fill missing headers
         provided_to = to if to is not None else to_address
@@ -230,8 +244,30 @@ class GmailClient:
                 "`to`/`to_address` must be provided either directly or via thread headers"
             )
 
-        # build MIME message
-        msg = MIMEText(body_text)
+        # Build MIME message with optional attachments
+        if attachments:
+            msg = MIMEMultipart()
+            text_part = MIMEText(body_text)
+            msg.attach(text_part)
+            
+            for file_path in attachments:
+                if not os.path.exists(file_path):
+                    logger.warning(f"Attachment file not found: {file_path}")
+                    continue
+                
+                filename = os.path.basename(file_path)
+                mime_type, _ = mimetypes.guess_type(file_path)
+                if mime_type is None:
+                    mime_type = "application/octet-stream"
+                
+                with open(file_path, "rb") as attachment:
+                    file_data = attachment.read()
+                    part = MIMEApplication(file_data, Name=filename)
+                    part["Content-Disposition"] = f'attachment; filename="{filename}"'
+                    msg.attach(part)
+        else:
+            msg = MIMEText(body_text)
+
         msg["To"] = to_header
         if cc_header:
             msg["Cc"] = cc_header
