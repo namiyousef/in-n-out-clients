@@ -1,6 +1,6 @@
 import base64
 import logging
-import os.path
+import os
 from email.mime.text import MIMEText
 from typing import List, Optional, TypedDict, Union
 
@@ -89,6 +89,43 @@ class GmailClient:
         messages.pop("resultSizeEstimate")
 
         return messages
+    
+    # TODO copilot generated. Review and cleanup
+    def get_attachment(
+        self,
+        message_id: str,
+        attachment_id: str,
+        content_type: str,
+        filename: str,
+        output_dir: str = ".",
+    ) -> str:
+        """Download an attachment and save it to disk based on content type.
+
+        Organizes files into subdirectories by category (images/, documents/, etc.)
+
+        :param message_id: Gmail message ID
+        :param attachment_id: Gmail attachment ID
+        :param content_type: MIME content type (e.g., "application/pdf", "image/png")
+        :param filename: Original filename for the attachment
+        :param output_dir: Base directory to save files (default: current directory)
+        :return: Path to the saved file
+        """
+
+        # Fetch and decode attachment
+        resp = self.client.users().messages().attachments().get(
+            userId="me", id=attachment_id, messageId=message_id
+        ).execute()
+
+        file_data = base64.urlsafe_b64decode(resp["data"])
+
+        output_path = os.path.join(output_dir, filename)
+        with open(output_path, "wb") as f:
+            f.write(file_data)
+
+        logger.info(
+            f"Saved {content_type} attachment to {output_path} (size: {len(file_data)} bytes)"
+        )
+        return output_path
 
     def get_messages_in_thread(self, thread_id: str):
         thread = (
